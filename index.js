@@ -54,19 +54,11 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
   }
 }
 
-async function textToSpeech(sentence) {
+async function textToSpeech(sentence, filePath) {
   try {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-
-    const fileName =
-      sentence.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9\-]/g, "") + ".mp3";
-    const destDir = path.join(__dirname, "speech_files");
-
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir);
-    }
 
     const voices = ["nova", "alloy", "echo", "fable", "shimmer"];
     const randomVoice = voices[Math.floor(Math.random() * voices.length)];
@@ -82,13 +74,114 @@ async function textToSpeech(sentence) {
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
-    const filePath = path.join(destDir, fileName);
     await fs.promises.writeFile(filePath, buffer);
 
     console.log(`Audio file saved`);
   } catch (error) {
     console.error("Error generating speech audio:", error.message);
   }
+}
+
+async function ensureDeckExists(deckName) {
+  try {
+    const deckListResponse = await fetch("http://localhost:8765", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "deckNames", version: 6 }),
+    });
+
+    const deckList = await deckListResponse.json();
+    if (deckList.error) {
+      throw new Error(deckList.error);
+    }
+
+    if (!deckList.result.includes(deckName)) {
+      const createDeckResponse = await fetch("http://localhost:8765", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "createDeck",
+          version: 6,
+          params: { deck: deckName },
+        }),
+      });
+
+      const createDeckResult = await createDeckResponse.json();
+      if (createDeckResult.error) {
+        throw new Error(createDeckResult.error);
+      }
+      console.log(`Created deck: ${deckName}`);
+    }
+  } catch (error) {
+    console.error("Failed to ensure deck exists:", error);
+  }
+}
+
+async function pushSentenceAndAudioToAnki(
+  chatGPTsentence,
+  targetWord,
+  audioFilePath,
+  deckName = "TESTING ANKI SENTENCES"
+) {
+  await ensureDeckExists(deckName);
+
+  const formattedSentence = chatGPTsentence.replace(
+    new RegExp(`\\b${targetWord}\\b`, "gi"),
+    `<b>${targetWord}</b>`
+  );
+
+  const note = {
+    action: "addNote",
+    version: 6,
+    params: {
+      note: {
+        deckName: deckName,
+        modelName: "Basic",
+        fields: {
+          Front: ``,
+          Back: formattedSentence,
+        },
+        options: {
+          allowDuplicate: false,
+        },
+        audio: [
+          {
+            path: audioFilePath,
+            filename: audioFilePath.split("/").pop(),
+            fields: ["Front"],
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    const response = await fetch("http://localhost:8765", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note),
+    });
+
+    const result = await response.json();
+    if (result.error) {
+      console.error("AnkiConnect Error:", result.error);
+    } else {
+      console.log("Card added successfully:", result);
+    }
+  } catch (error) {
+    console.error("Failed to connect to AnkiConnect:", error);
+  }
+}
+
+function createFilePath(sentence) {
+  const fileName =
+    sentence.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9\-]/g, "") + ".mp3";
+  const destDir = path.join(__dirname, "speech_files");
+
+  if (!fs.existsSync(destDir)) {
+    fs.mkdirSync(destDir);
+  }
+  return path.join(destDir, fileName);
 }
 
 async function run() {
@@ -107,24 +200,14 @@ async function run() {
     promptDifficulty = process.env.INTERMEDIATE_PROMPT;
   else if (difficulty === "b2") promptDifficulty = process.env.ADVANCED_PROMPT;
 
-  const example1 = await generateSentenceFromKnownWords(
+  const chatGPTsentence = await generateSentenceFromKnownWords(
     [],
     targetWord,
     promptDifficulty
   );
-  // const example2 = await generateSentenceFromKnownWords(
-  //   [],
-  //   targetWord,
-  //   process.env.INTERMEDIATE_PROMPT
-  // );
-  // const example3 = await generateSentenceFromKnownWords(
-  //   [],
-  //   targetWord,
-  //   process.env.ADVANCED_PROMPT
-  // );
-  await textToSpeech(example1);
-  // await textToSpeech(example2);
-  // await textToSpeech(example3);
+  const audioFilePath = createFilePath(chatGPTsentence);
+  await textToSpeech(chatGPTsentence, audioFilePath);
+  await pushSentenceAndAudioToAnki(chatGPTsentence, targetWord, audioFilePath);
 }
 
 run();
