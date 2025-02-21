@@ -28,7 +28,7 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
       {
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: promptWithTargetWordAndLanguage }],
-        max_tokens: 5,
+        max_tokens: 50,
       },
       {
         headers: {
@@ -38,7 +38,12 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
       }
     );
 
-    console.log("ChatGPT Response:", response.data);
+    console.log("Tokens used:", response.data.usage.total_tokens);
+    console.log(
+      "Tokens cached:",
+      response.data.usage.prompt_tokens_details.cached_tokens
+    );
+    console.log("Response:", response.data.choices[0].message.content);
 
     return response.data.choices[0].message.content;
   } catch (error) {
@@ -87,18 +92,39 @@ async function textToSpeech(sentence) {
 }
 
 async function run() {
+  const targetWord = process.argv[2];
+  const difficulty = process.argv[3];
+
+  if (!targetWord || !difficulty) {
+    console.error("Usage: node script.js <target-word> <a2 | b1 | b2>");
+    process.exit(1);
+  }
+
+  let promptDifficulty = "";
+
+  if (difficulty === "a2") promptDifficulty = process.env.BEGINNER_PROMPT;
+  else if (difficulty === "b1")
+    promptDifficulty = process.env.INTERMEDIATE_PROMPT;
+  else if (difficulty === "b2") promptDifficulty = process.env.ADVANCED_PROMPT;
+
   const example1 = await generateSentenceFromKnownWords(
     [],
-    "monde",
-    process.env.BEGINNER_PROMPT
+    targetWord,
+    promptDifficulty
   );
-  const example2 = await generateSentenceFromKnownWords(
-    [],
-    "monde",
-    process.env.ADVANCED_PROMPT
-  );
+  // const example2 = await generateSentenceFromKnownWords(
+  //   [],
+  //   targetWord,
+  //   process.env.INTERMEDIATE_PROMPT
+  // );
+  // const example3 = await generateSentenceFromKnownWords(
+  //   [],
+  //   targetWord,
+  //   process.env.ADVANCED_PROMPT
+  // );
   await textToSpeech(example1);
-  await textToSpeech(example2);
+  // await textToSpeech(example2);
+  // await textToSpeech(example3);
 }
 
 run();
