@@ -19,7 +19,7 @@ async function callChatGPT(prompt) {
     const response = await axios.post(
       API_URL,
       {
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 200,
       },
@@ -34,7 +34,9 @@ async function callChatGPT(prompt) {
     const { total_tokens } = response.data.usage;
     const cachedTokens =
       response.data.usage?.prompt_tokens_details?.cached_tokens;
-    const content = response.data.choices[0].message.content.slice(0, -1);
+    const content = response.data.choices[0].message.content.endsWith(".")
+      ? response.data.choices[0].message.content.slice(0, -1)
+      : response.data.choices[0].message.content;
 
     console.log("Tokens used:", total_tokens);
     if (cachedTokens !== undefined) {
@@ -61,8 +63,8 @@ async function callChatGPT(prompt) {
  */
 async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
   const promptWithReplacements = prompt
-    .replace("<target-word>", targetWord)
-    .replace("<language>", process.env.TARGET_LANGUAGE);
+    .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE)
+    .replaceAll("<target-word>", targetWord);
 
   return await callChatGPT(promptWithReplacements);
 }
@@ -75,9 +77,11 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
  */
 async function getWordDefinitionFromChatGPT(targetWord, prompt) {
   const promptWithReplacements = prompt
-    .replace("<target-word>", targetWord)
-    .replace("<NATIVE_LANGUAGE_CODE>", process.env.NATIVE_LANGUAGE_CODE)
-    .replace("<TARGET_LANGUAGE_CODE>", process.env.TARGET_LANGUAGE);
+    .replaceAll("<target-word>", targetWord)
+    .replaceAll("<NATIVE_LANGUAGE>", process.env.NATIVE_LANGUAGE)
+    .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE);
+
+  console.log("promptWithReplacements", promptWithReplacements);
 
   return await callChatGPT(promptWithReplacements);
 }
@@ -98,7 +102,7 @@ async function textToSpeech(sentence, filePath) {
       voice: randomVoice,
       input: sentence,
       format: "mp3",
-      language: process.env.TARGET_LANGUAGE,
+      language: process.env.TARGET_LANGUAGE_CHATGPT_CODE,
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -222,17 +226,16 @@ async function run() {
     process.exit(1);
   }
 
-  let promptDifficulty = "";
+  let prompt = "";
 
-  if (difficulty === "a2") promptDifficulty = process.env.BEGINNER_PROMPT;
-  else if (difficulty === "b1")
-    promptDifficulty = process.env.INTERMEDIATE_PROMPT;
-  else if (difficulty === "b2") promptDifficulty = process.env.ADVANCED_PROMPT;
+  if (difficulty === "a2") prompt = process.env.BEGINNER_PROMPT;
+  else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
+  else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
 
   const chatGPTsentence = await generateSentenceFromKnownWords(
     [],
     targetWord,
-    promptDifficulty
+    prompt
   );
   const wordDefinition = await getWordDefinitionFromChatGPT(
     targetWord,
