@@ -8,27 +8,20 @@ const API_URL = "https://api.openai.com/v1/chat/completions";
 const API_KEY = process.env.OPENAI_API_KEY;
 
 /**
- *
- * @param {string[]} knownWords - list words that the user knows to build sentences from
- * @param {string} targetWord - target word to learn
- * @param {string} prompt - prompt to create the sentence to be
- *
- * @returns {string} sentence with the target word, to then be converted to audio
+ * Calls the ChatGPT API with the given prompt
+ * @param {string} prompt - The prompt to send to the API
+ * @returns {Promise<string>} The response content from ChatGPT
  */
-async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
+async function callChatGPT(prompt) {
   try {
-    const promptWithTargetWordAndLanguage = prompt
-      .replace("<target-word>", targetWord)
-      .replace("<language>", process.env.TARGET_LANGUAGE);
-
-    console.log(promptWithTargetWordAndLanguage);
+    console.log("Sending prompt:", prompt);
 
     const response = await axios.post(
       API_URL,
       {
         model: "gpt-4o-mini",
-        messages: [{ role: "user", content: promptWithTargetWordAndLanguage }],
-        max_tokens: 50,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 200,
       },
       {
         headers: {
@@ -38,20 +31,55 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
       }
     );
 
-    console.log("Tokens used:", response.data.usage.total_tokens);
-    console.log(
-      "Tokens cached:",
-      response.data.usage.prompt_tokens_details.cached_tokens
-    );
-    console.log("Response:", response.data.choices[0].message.content);
+    const { total_tokens } = response.data.usage;
+    const cachedTokens =
+      response.data.usage?.prompt_tokens_details?.cached_tokens;
+    const content = response.data.choices[0].message.content.slice(0, -1);
 
-    return response.data.choices[0].message.content;
+    console.log("Tokens used:", total_tokens);
+    if (cachedTokens !== undefined) {
+      console.log("Tokens cached:", cachedTokens);
+    }
+    console.log("Response:", content);
+
+    return content;
   } catch (error) {
     console.error(
       "Error:",
       error.response ? error.response.data : error.message
     );
+    return "";
   }
+}
+
+/**
+ * Generates a sentence using known words and the target word
+ * @param {string[]} knownWords - List of words that the user knows
+ * @param {string} targetWord - The target word to learn
+ * @param {string} prompt - The base prompt template
+ * @returns {Promise<string>} The generated sentence
+ */
+async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
+  const promptWithReplacements = prompt
+    .replace("<target-word>", targetWord)
+    .replace("<language>", process.env.TARGET_LANGUAGE);
+
+  return await callChatGPT(promptWithReplacements);
+}
+
+/**
+ * Fetches the definition of a word using ChatGPT
+ * @param {string} targetWord - The word to define
+ * @param {string} prompt - The base prompt template
+ * @returns {Promise<string>} The word definition
+ */
+async function getWordDefinitionFromChatGPT(targetWord, prompt) {
+  const promptWithReplacements = prompt
+    .replace("<target-word>", targetWord)
+    .replace("<NATIVE_LANGUAGE_CODE>", process.env.NATIVE_LANGUAGE_CODE)
+    .replace("<TARGET_LANGUAGE_CODE>", process.env.TARGET_LANGUAGE);
+
+  return await callChatGPT(promptWithReplacements);
 }
 
 async function textToSpeech(sentence, filePath) {
@@ -118,6 +146,7 @@ async function ensureDeckExists(deckName) {
 }
 
 async function pushSentenceAndAudioToAnki(
+  targetWordTranslation,
   chatGPTsentence,
   targetWord,
   audioFilePath,
@@ -139,7 +168,7 @@ async function pushSentenceAndAudioToAnki(
         modelName: "Basic",
         fields: {
           Front: ``,
-          Back: formattedSentence,
+          Back: formattedSentence + "<br /> <br />" + targetWordTranslation,
         },
         options: {
           allowDuplicate: false,
@@ -205,9 +234,18 @@ async function run() {
     targetWord,
     promptDifficulty
   );
+  const wordDefinition = await getWordDefinitionFromChatGPT(
+    targetWord,
+    process.env.WORD_DEFINITION_PROMPT
+  );
   const audioFilePath = createFilePath(chatGPTsentence);
   await textToSpeech(chatGPTsentence, audioFilePath);
-  await pushSentenceAndAudioToAnki(chatGPTsentence, targetWord, audioFilePath);
+  await pushSentenceAndAudioToAnki(
+    wordDefinition,
+    chatGPTsentence,
+    targetWord,
+    audioFilePath
+  );
 }
 
 run();
