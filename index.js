@@ -86,6 +86,16 @@ async function getWordDefinitionFromChatGPT(targetWord, prompt) {
   return await callChatGPT(promptWithReplacements);
 }
 
+/**
+ * Translates a sentence to the native language using ChatGPT
+ * @param {string} sentence - The sentence to translate
+ * @returns {Promise<string>} The translated sentence
+ */
+async function translateSentence(sentence) {
+  const prompt = `Translate this ${process.env.TARGET_LANGUAGE} sentence to ${process.env.NATIVE_LANGUAGE}:\n\n"${sentence}"`;
+  return await callChatGPT(prompt);
+}
+
 async function textToSpeech(sentence, filePath) {
   try {
     const openai = new OpenAI({
@@ -153,8 +163,9 @@ async function pushSentenceAndAudioToAnki(
   targetWordTranslation,
   chatGPTsentence,
   targetWord,
+  sentenceTranslation,
   audioFilePath,
-  deckName = "TESTING ANKI SENTENCES"
+  deckName = "French::Sentences from target words"
 ) {
   await ensureDeckExists(deckName);
 
@@ -162,6 +173,56 @@ async function pushSentenceAndAudioToAnki(
     new RegExp(`\\b${targetWord}\\b`, "gi"),
     `<b>${targetWord}</b>`
   );
+
+  const keyboardScript = `
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      setupRevealListeners();
+    });
+    
+    setupRevealListeners();
+    
+    function setupRevealListeners() {
+      document.addEventListener('keydown', function(event) {
+        if (event.key === '.') {
+          revealTranslation();
+        }
+      });
+      
+      const hiddenText = document.getElementById('hidden-translation');
+      if (hiddenText) {
+        hiddenText.addEventListener('click', revealTranslation);
+      }
+      
+      if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
+        setTimeout(revealTranslation, 500);
+      }
+    }
+
+    function revealTranslation() {
+      const hiddenText = document.getElementById('hidden-translation');
+      if (hiddenText) {
+        hiddenText.style.backgroundColor = 'transparent';
+        hiddenText.style.color = '#5C5C5C';
+        hiddenText.style.textShadow = '0 0 0 #5C5C5C'; 
+      }
+    }
+  </script>
+  `;
+
+  const hiddenTranslation = `
+  <div id="hidden-translation" style="
+    background-color: #AAAAAA; 
+    color: #AAAAAA; 
+    padding: 5px;
+    margin-top: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+  ">
+    ${sentenceTranslation}
+  </div>
+  `;
 
   const note = {
     action: "addNote",
@@ -172,7 +233,16 @@ async function pushSentenceAndAudioToAnki(
         modelName: "Basic",
         fields: {
           Front: ``,
-          Back: formattedSentence + "<br /> <br />" + targetWordTranslation,
+          Back:
+            formattedSentence +
+            "<br /> <br />" +
+            targetWordTranslation +
+            "<br /> <br />" +
+            "<div style='border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;'>" +
+            "<small>Click for translation or press '.' key</small><br/>" +
+            hiddenTranslation +
+            "</div>" +
+            keyboardScript,
         },
         options: {
           allowDuplicate: false,
@@ -199,10 +269,12 @@ async function pushSentenceAndAudioToAnki(
     if (result.error) {
       console.error("AnkiConnect Error:", result.error);
     } else {
-      console.log("Card added successfully:", result);
+      console.log("Note added successfully");
+      return true;
     }
   } catch (error) {
     console.error("Failed to connect to AnkiConnect:", error);
+    return false;
   }
 }
 
@@ -232,21 +304,32 @@ async function run() {
   else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
   else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
 
+  // Generate the sentence in target language
   const chatGPTsentence = await generateSentenceFromKnownWords(
     [],
     targetWord,
     prompt
   );
+
+  // Get word definition
   const wordDefinition = await getWordDefinitionFromChatGPT(
     targetWord,
     process.env.WORD_DEFINITION_PROMPT
   );
+
+  // Get translation of the full sentence
+  const sentenceTranslation = await translateSentence(chatGPTsentence);
+
+  // Create audio file
   const audioFilePath = createFilePath(chatGPTsentence);
   await textToSpeech(chatGPTsentence, audioFilePath);
+
+  // Push everything to Anki
   await pushSentenceAndAudioToAnki(
     wordDefinition,
     chatGPTsentence,
     targetWord,
+    sentenceTranslation,
     audioFilePath
   );
 }
