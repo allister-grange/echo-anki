@@ -55,6 +55,28 @@ async function callChatGPT(prompt) {
 }
 
 /**
+ * Determines if the input is a word, phrase, or complete sentence
+ * @param {string} input - The input text to analyze
+ * @returns {string} Type of input: 'word', 'phrase', or 'sentence'
+ */
+function determineInputType(input) {
+  const trimmedInput = input.trim();
+
+  // Check if it's a single word
+  if (/^[\w\-']+$/i.test(trimmedInput)) {
+    return "word";
+  }
+
+  // Check if it's a complete sentence (ends with .!? and has a structure resembling a sentence)
+  if (/[.!?]$/.test(trimmedInput) && /\b\w+\b.*\b\w+\b/i.test(trimmedInput)) {
+    return "sentence";
+  }
+
+  // Otherwise, treat as a phrase
+  return "phrase";
+}
+
+/**
  * Generates a sentence using known words and the target word
  * @param {string[]} knownWords - List of words that the user knows
  * @param {string} targetWord - The target word to learn
@@ -70,14 +92,35 @@ async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
 }
 
 /**
- * Fetches the definition of a word using ChatGPT
- * @param {string} targetWord - The word to define
- * @param {string} prompt - The base prompt template
- * @returns {Promise<string>} The word definition
+ * Generates a sentence incorporating the target phrase
+ * @param {string} targetPhrase - The phrase or sentence to incorporate
+ * @param {string} difficulty - The difficulty level (a2, b1, b2)
+ * @returns {Promise<string>} The generated sentence
  */
-async function getWordDefinitionFromChatGPT(targetWord, prompt) {
+async function generateSentenceFromPhrase(targetPhrase, difficulty) {
+  let difficultyLevel = "beginner (A2)";
+  if (difficulty === "b1") difficultyLevel = "intermediate (B1)";
+  else if (difficulty === "b2") difficultyLevel = "advanced (B2)";
+
+  const promptWithReplacements = process.env.PHRASE_SENTENCE_PROMPT.replaceAll(
+    "<target-phrase>",
+    targetPhrase
+  )
+    .replaceAll("<DIFFICULTY_LEVEL>", difficultyLevel)
+    .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE);
+
+  return await callChatGPT(promptWithReplacements);
+}
+
+/**
+ * Fetches the definition of a word or phrase using ChatGPT
+ * @param {string} targetText - The word or phrase to define
+ * @param {string} prompt - The base prompt template
+ * @returns {Promise<string>} The definition
+ */
+async function getWordDefinitionFromChatGPT(targetText, prompt) {
   const promptWithReplacements = prompt
-    .replaceAll("<target-word>", targetWord)
+    .replaceAll("<target-word>", targetText)
     .replaceAll("<NATIVE_LANGUAGE>", process.env.NATIVE_LANGUAGE)
     .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE);
 
@@ -159,20 +202,41 @@ async function ensureDeckExists(deckName) {
   }
 }
 
+/**
+ * Highlights the target text within the sentence
+ * @param {string} sentence - The full sentence
+ * @param {string} targetText - The text to highlight
+ * @returns {string} The sentence with the target text highlighted
+ */
+function highlightTargetText(sentence, targetText) {
+  // Escape special regex characters in the target text
+  const escapedTarget = targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Create a regex that looks for the exact target text with word boundaries if it's a single word
+  const isWord = /^[\w\-']+$/i.test(targetText.trim());
+  const regexPattern = isWord
+    ? new RegExp(`\\b${escapedTarget}\\b`, "gi")
+    : new RegExp(escapedTarget, "gi");
+
+  return sentence.replace(regexPattern, `<b>${targetText}</b>`);
+}
+
 async function pushSentenceAndAudioToAnki(
-  targetWordTranslation,
+  targetTextTranslation,
   chatGPTsentence,
-  targetWord,
+  targetText,
   sentenceTranslation,
   audioFilePath,
+  inputType,
   deckName = "French::Sentences from target words"
 ) {
   await ensureDeckExists(deckName);
 
-  const formattedSentence = chatGPTsentence.replace(
-    new RegExp(`\\b${targetWord}\\b`, "gi"),
-    `<b>${targetWord}</b>`
-  );
+  // Only highlight if it's a word or phrase, not a sentence
+  const formattedSentence =
+    inputType === "sentence"
+      ? chatGPTsentence
+      : highlightTargetText(chatGPTsentence, targetText);
 
   const keyboardScript = `
   <script>
@@ -224,6 +288,33 @@ async function pushSentenceAndAudioToAnki(
   </div>
   `;
 
+  // Create appropriate content based on input type
+  let backContent = "";
+
+  if (inputType === "sentence") {
+    // For sentences, only show the sentence and hide the translation
+    backContent =
+      formattedSentence +
+      "<br /> <br />" +
+      "<div style='border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;'>" +
+      "<small>Click for translation or press '.' key</small><br/>" +
+      hiddenTranslation +
+      "</div>" +
+      keyboardScript;
+  } else {
+    // For words and phrases, show definition and translation
+    backContent =
+      formattedSentence +
+      "<br /> <br />" +
+      targetTextTranslation +
+      "<br /> <br />" +
+      "<div style='border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;'>" +
+      "<small>Click for translation or press '.' key</small><br/>" +
+      hiddenTranslation +
+      "</div>" +
+      keyboardScript;
+  }
+
   const note = {
     action: "addNote",
     version: 6,
@@ -233,16 +324,7 @@ async function pushSentenceAndAudioToAnki(
         modelName: "Basic",
         fields: {
           Front: ``,
-          Back:
-            formattedSentence +
-            "<br /> <br />" +
-            targetWordTranslation +
-            "<br /> <br />" +
-            "<div style='border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;'>" +
-            "<small>Click for translation or press '.' key</small><br/>" +
-            hiddenTranslation +
-            "</div>" +
-            keyboardScript,
+          Back: backContent,
         },
         options: {
           allowDuplicate: false,
@@ -290,30 +372,42 @@ function createFilePath(sentence) {
 }
 
 async function run() {
-  const targetWord = process.argv[2];
+  const targetText = process.argv[2];
   const difficulty = process.argv[3];
 
-  if (!targetWord || !difficulty) {
-    console.error("Usage: node script.js <target-word> <a2 | b1 | b2>");
+  if (!targetText || !difficulty) {
+    console.error(
+      "Usage: node script.js <target-word-or-phrase> <a2 | b1 | b2>"
+    );
     process.exit(1);
   }
 
-  let prompt = "";
+  const inputType = determineInputType(targetText);
+  console.log(`Input type detected: ${inputType}`);
 
-  if (difficulty === "a2") prompt = process.env.BEGINNER_PROMPT;
-  else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
-  else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
+  let chatGPTsentence = "";
 
-  // Generate the sentence in target language
-  const chatGPTsentence = await generateSentenceFromKnownWords(
-    [],
-    targetWord,
-    prompt
-  );
+  // Handle different input types
+  if (inputType === "word") {
+    // For single words, use the original word-based prompt
+    let prompt = "";
+    if (difficulty === "a2") prompt = process.env.BEGINNER_PROMPT;
+    else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
+    else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
 
-  // Get word definition
-  const wordDefinition = await getWordDefinitionFromChatGPT(
-    targetWord,
+    chatGPTsentence = await generateSentenceFromKnownWords(
+      [],
+      targetText,
+      prompt
+    );
+  } else {
+    // For phrases and sentences, use the new phrase-handling function
+    chatGPTsentence = await generateSentenceFromPhrase(targetText, difficulty);
+  }
+
+  // Get definition/translation of the target text
+  const textDefinition = await getWordDefinitionFromChatGPT(
+    targetText,
     process.env.WORD_DEFINITION_PROMPT
   );
 
@@ -324,13 +418,14 @@ async function run() {
   const audioFilePath = createFilePath(chatGPTsentence);
   await textToSpeech(chatGPTsentence, audioFilePath);
 
-  // Push everything to Anki
+  // Push everything to Anki with the input type
   await pushSentenceAndAudioToAnki(
-    wordDefinition,
+    textDefinition,
     chatGPTsentence,
-    targetWord,
+    targetText,
     sentenceTranslation,
-    audioFilePath
+    audioFilePath,
+    inputType
   );
 }
 
