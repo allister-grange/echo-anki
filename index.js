@@ -145,7 +145,7 @@ async function textToSpeech(sentence, filePath) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    const voices = ["nova", "alloy", "echo", "fable", "shimmer"];
+    const voices = ["nova", "alloy", "fable", "shimmer"];
     const randomVoice = voices[Math.floor(Math.random() * voices.length)];
 
     console.log("Using voice", randomVoice, "to generate", sentence);
