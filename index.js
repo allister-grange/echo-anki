@@ -360,6 +360,63 @@ async function pushSentenceAndAudioToAnki(
   }
 }
 
+/**
+ * Adds a second card to Anki for speaking practice:
+ * English sentence on front, French sentence on back
+ */
+async function pushBilingualCardToAnki(
+  nativeSentence,
+  targetSentence,
+  audioFilePath,
+  deckName = "French::English to French Speaking Practise"
+) {
+  await ensureDeckExists(deckName);
+
+  const note = {
+    action: "addNote",
+    version: 6,
+    params: {
+      note: {
+        deckName: deckName,
+        modelName: "Basic",
+        fields: {
+          Front: `(french) ${nativeSentence}`,
+          Back: targetSentence,
+        },
+        options: {
+          allowDuplicate: false,
+        },
+        audio: [
+          {
+            path: audioFilePath,
+            filename: audioFilePath.split("/").pop(),
+            fields: ["Back"],
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    const response = await fetch("http://localhost:8765", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note),
+    });
+
+    const result = await response.json();
+    if (result.error) {
+      console.error("AnkiConnect Error:", result.error);
+    } else {
+      console.log("Bilingual note added successfully");
+      return true;
+    }
+  } catch (error) {
+    console.error("Failed to connect to AnkiConnect (bilingual card):", error);
+    return false;
+  }
+}
+
 function createFilePath(sentence) {
   const fileName =
     sentence.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9\-]/g, "") + ".mp3";
@@ -426,6 +483,12 @@ async function run() {
     sentenceTranslation,
     audioFilePath,
     inputType
+  );
+
+  await pushBilingualCardToAnki(
+    sentenceTranslation,
+    chatGPTsentence,
+    audioFilePath
   );
 }
 

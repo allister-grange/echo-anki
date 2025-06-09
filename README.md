@@ -8,3 +8,12 @@ Write a project that will:
   - create a voice recording of that sentence
   - create an anki card with the recording on the front, the sentence on the back with the key word bolded
 
+## how to run
+
+```sh
+# for an individual word
+node index.js <your word> b1                             
+
+# for a list of words in a text file
+./wordBuilder.sh
+```
