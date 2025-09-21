@@ -1,11 +1,11 @@
 require("dotenv").config();
-const axios = require("axios");
 const { OpenAI } = require("openai");
 const fs = require("fs");
 const path = require("path");
 
-const API_URL = "https://api.openai.com/v1/chat/completions";
-const API_KEY = process.env.OPENAI_API_KEY;
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /**
  * Calls the ChatGPT API with the given prompt
@@ -16,40 +16,23 @@ async function callChatGPT(prompt) {
   try {
     console.log("Sending prompt:", prompt);
 
-    const response = await axios.post(
-      API_URL,
-      {
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 200,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${API_KEY}`,
-        },
-      }
-    );
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 200,
+    });
 
-    const { total_tokens } = response.data.usage;
-    const cachedTokens =
-      response.data.usage?.prompt_tokens_details?.cached_tokens;
-    const content = response.data.choices[0].message.content.endsWith(".")
-      ? response.data.choices[0].message.content.slice(0, -1)
-      : response.data.choices[0].message.content;
+    const { total_tokens } = response.usage;
+    const content = response.choices[0].message.content.endsWith(".")
+      ? response.choices[0].message.content.slice(0, -1)
+      : response.choices[0].message.content;
 
     console.log("Tokens used:", total_tokens);
-    if (cachedTokens !== undefined) {
-      console.log("Tokens cached:", cachedTokens);
-    }
     console.log("Response:", content);
 
     return content;
   } catch (error) {
-    console.error(
-      "Error:",
-      error.response ? error.response.data : error.message
-    );
+    console.error("Error:", error.message);
     return "";
   }
 }
@@ -143,10 +126,6 @@ async function translateSentence(sentence) {
 
 async function textToSpeech(sentence, filePath) {
   try {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
     const voices = ["nova", "alloy", "fable", "shimmer"];
     const randomVoice = voices[Math.floor(Math.random() * voices.length)];
 
@@ -213,7 +192,7 @@ async function ensureDeckExists(deckName) {
  */
 function highlightTargetText(sentence, targetText) {
   // Escape special regex characters in the target text
-  const escapedTarget = targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTarget = targetText.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
 
   // Create a regex that looks for the exact target text with word boundaries if it's a single word
   const isWord = /^[\w\-']+$/i.test(targetText.trim());
