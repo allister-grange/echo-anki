@@ -84,6 +84,8 @@ function determineInputType(input) {
  * @returns {Promise<string>} The generated sentence
  */
 async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
+  console.log(targetWord, prompt);
+
   const promptWithReplacements = prompt
     .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE)
     .replaceAll("<target-word>", targetWord);
@@ -151,11 +153,12 @@ async function textToSpeech(sentence, filePath) {
     console.log("Using voice", randomVoice, "to generate", sentence);
 
     const response = await openai.audio.speech.create({
-      model: "tts-1",
+      model: "gpt-4o-mini-tts",
       voice: randomVoice,
       input: sentence,
       format: "mp3",
       language: process.env.TARGET_LANGUAGE_CHATGPT_CODE,
+      instructions: `Use a ${process.env.TARGET_LANGUAGE} accent.`,
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -451,6 +454,8 @@ async function run() {
     if (difficulty === "a2") prompt = process.env.BEGINNER_PROMPT;
     else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
     else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
+
+    console.log(prompt);
 
     chatGPTsentence = await generateSentenceFromKnownWords(
       [],
