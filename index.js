@@ -2,6 +2,7 @@ require("dotenv").config();
 const { OpenAI } = require("openai");
 const fs = require("fs");
 const path = require("path");
+const { ElevenLabsClient } = require("elevenlabs");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -60,23 +61,6 @@ function determineInputType(input) {
 }
 
 /**
- * Generates a sentence using known words and the target word
- * @param {string[]} knownWords - List of words that the user knows
- * @param {string} targetWord - The target word to learn
- * @param {string} prompt - The base prompt template
- * @returns {Promise<string>} The generated sentence
- */
-async function generateSentenceFromKnownWords(knownWords, targetWord, prompt) {
-  console.log(targetWord, prompt);
-
-  const promptWithReplacements = prompt
-    .replaceAll("<TARGET_LANGUAGE>", process.env.TARGET_LANGUAGE)
-    .replaceAll("<target-word>", targetWord);
-
-  return await callChatGPT(promptWithReplacements);
-}
-
-/**
  * Generates a sentence incorporating the target phrase
  * @param {string} targetPhrase - The phrase or sentence to incorporate
  * @param {string} difficulty - The difficulty level (a2, b1, b2)
@@ -120,32 +104,77 @@ async function getWordDefinitionFromChatGPT(targetText, prompt) {
  * @returns {Promise<string>} The translated sentence
  */
 async function translateSentence(sentence) {
-  const prompt = `Translate this ${process.env.TARGET_LANGUAGE} sentence to ${process.env.NATIVE_LANGUAGE}:\n\n"${sentence}"`;
-  return await callChatGPT(prompt);
+  const prompt = `Translate the following ${process.env.TARGET_LANGUAGE} text to ${process.env.NATIVE_LANGUAGE}. Respond with only the translated text itself, without any extra words, explanations, or formatting.\n\n"${sentence}"`;
+  let translation = await callChatGPT(prompt);
+
+  // If the response is a full sentence explaining the translation, try to extract it.
+  // e.g., 'The phrase "..." translates to "..."'
+  const matches = translation.match(/"(.*?)"/g);
+  if (translation.includes("translates to") && matches && matches.length > 1) {
+    // Take the last quoted part
+    translation = matches[matches.length - 1];
+  }
+
+  // Clean up surrounding quotes that are often added by the model
+  if (translation.startsWith('"') && translation.endsWith('"')) {
+    translation = translation.slice(1, -1);
+  }
+
+  return translation;
+}
+
+async function readableStreamToBuffer(stream) {
+  const reader = stream.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function textToSpeech(sentence, filePath) {
   try {
-    const voices = ["nova", "alloy", "fable", "shimmer"];
-    const randomVoice = voices[Math.floor(Math.random() * voices.length)];
+    if (!process.env.ELEVENLABS_API_KEY) {
+      throw new Error(
+        "ELEVENLABS_API_KEY is not set in the environment variables."
+      );
+    }
 
-    console.log("Using voice", randomVoice, "to generate", sentence);
-
-    const response = await openai.audio.speech.create({
-      model: "gpt-4o-mini-tts",
-      voice: randomVoice,
-      input: sentence,
-      format: "mp3",
-      language: process.env.TARGET_LANGUAGE_CHATGPT_CODE,
-      instructions: `Use a ${process.env.TARGET_LANGUAGE} accent.`,
+    const elevenlabs = new ElevenLabsClient({
+      apiKey: process.env.ELEVENLABS_API_KEY,
     });
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    await fs.promises.writeFile(filePath, buffer);
+    const voiceId = "JBFqnCBsd6RMkjVDRZzb"; // Adam
 
-    console.log(`Audio file saved`);
+    console.log(
+      "Using ElevenLabs voice",
+      voiceId,
+      "to generate speech for:",
+      sentence
+    );
+
+    // Using the user-specified method.
+    const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
+      text: sentence,
+      modelId: "eleven_multilingual_v2",
+      outputFormat: "mp3_44100_128",
+      languageCode: "fr", // camelCase
+      voice_settings: {
+        speed: 1.1,
+      },
+    });
+
+    const audioBuffer = await readableStreamToBuffer(audioStream);
+
+    await fs.promises.writeFile(filePath, audioBuffer);
+    console.log("Audio saved to:", filePath);
   } catch (error) {
-    console.error("Error generating speech audio:", error.message);
+    console.error(
+      "Error generating speech audio with ElevenLabs:",
+      error.message
+    );
   }
 }
 
@@ -192,7 +221,7 @@ async function ensureDeckExists(deckName) {
  */
 function highlightTargetText(sentence, targetText) {
   // Escape special regex characters in the target text
-  const escapedTarget = targetText.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+  const escapedTarget = targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   // Create a regex that looks for the exact target text with word boundaries if it's a single word
   const isWord = /^[\w\-']+$/i.test(targetText.trim());
@@ -421,59 +450,76 @@ async function run() {
     process.exit(1);
   }
 
-  const inputType = determineInputType(targetText);
-  console.log(`Input type detected: ${inputType}`);
+  const isQuoted = targetText.startsWith('"') && targetText.endsWith('"');
+  const actualText = isQuoted ? targetText.slice(1, -1) : targetText;
 
-  let chatGPTsentence = "";
+  if (isQuoted) {
+    // Quoted phrase logic
+    const inputType = "phrase";
+    console.log(`Input type detected: quoted ${inputType}`);
 
-  // Handle different input types
-  if (inputType === "word") {
-    // For single words, use the original word-based prompt
-    let prompt = "";
-    if (difficulty === "a2") prompt = process.env.BEGINNER_PROMPT;
-    else if (difficulty === "b1") prompt = process.env.INTERMEDIATE_PROMPT;
-    else if (difficulty === "b2") prompt = process.env.ADVANCED_PROMPT;
+    const chatGPTsentence = actualText;
 
-    console.log(prompt);
-
-    chatGPTsentence = await generateSentenceFromKnownWords(
-      [],
-      targetText,
-      prompt
+    const textDefinition = await getWordDefinitionFromChatGPT(
+      actualText,
+      process.env.WORD_DEFINITION_PROMPT
     );
+
+    const sentenceTranslation = await translateSentence(chatGPTsentence);
+
+    const audioFilePath = createFilePath(chatGPTsentence);
+    await textToSpeech(chatGPTsentence, audioFilePath);
+
+    // await pushSentenceAndAudioToAnki(
+    //   textDefinition,
+    //   chatGPTsentence,
+    //   actualText,
+    //   sentenceTranslation,
+    //   audioFilePath,
+    //   inputType
+    // );
+
+    // await pushBilingualCardToAnki(
+    //   sentenceTranslation,
+    //   chatGPTsentence,
+    //   audioFilePath
+    // );
   } else {
-    // For phrases and sentences, use the new phrase-handling function
-    chatGPTsentence = await generateSentenceFromPhrase(targetText, difficulty);
+    // Standard logic for words/phrases (not quoted)
+    const inputType = determineInputType(actualText);
+    console.log(`Input type detected: ${inputType}`);
+
+    const chatGPTsentence = await generateSentenceFromPhrase(
+      actualText,
+      difficulty
+    );
+
+    const textDefinition = await getWordDefinitionFromChatGPT(
+      actualText,
+      process.env.WORD_DEFINITION_PROMPT
+    );
+
+    if (chatGPTsentence) {
+      const sentenceTranslation = await translateSentence(chatGPTsentence);
+      const audioFilePath = createFilePath(chatGPTsentence);
+      await textToSpeech(chatGPTsentence, audioFilePath);
+
+      await pushSentenceAndAudioToAnki(
+        textDefinition,
+        chatGPTsentence,
+        actualText,
+        sentenceTranslation,
+        audioFilePath,
+        inputType
+      );
+
+      await pushBilingualCardToAnki(
+        sentenceTranslation,
+        chatGPTsentence,
+        audioFilePath
+      );
+    }
   }
-
-  // Get definition/translation of the target text
-  const textDefinition = await getWordDefinitionFromChatGPT(
-    targetText,
-    process.env.WORD_DEFINITION_PROMPT
-  );
-
-  // Get translation of the full sentence
-  const sentenceTranslation = await translateSentence(chatGPTsentence);
-
-  // Create audio file
-  const audioFilePath = createFilePath(chatGPTsentence);
-  await textToSpeech(chatGPTsentence, audioFilePath);
-
-  // Push everything to Anki with the input type
-  await pushSentenceAndAudioToAnki(
-    textDefinition,
-    chatGPTsentence,
-    targetText,
-    sentenceTranslation,
-    audioFilePath,
-    inputType
-  );
-
-  await pushBilingualCardToAnki(
-    sentenceTranslation,
-    chatGPTsentence,
-    audioFilePath
-  );
 }
 
 run();
