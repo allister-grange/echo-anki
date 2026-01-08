@@ -470,20 +470,20 @@ async function run() {
     const audioFilePath = createFilePath(chatGPTsentence);
     await textToSpeech(chatGPTsentence, audioFilePath);
 
-    // await pushSentenceAndAudioToAnki(
-    //   textDefinition,
-    //   chatGPTsentence,
-    //   actualText,
-    //   sentenceTranslation,
-    //   audioFilePath,
-    //   inputType
-    // );
+    await pushSentenceAndAudioToAnki(
+      textDefinition,
+      chatGPTsentence,
+      actualText,
+      sentenceTranslation,
+      audioFilePath,
+      inputType
+    );
 
-    // await pushBilingualCardToAnki(
-    //   sentenceTranslation,
-    //   chatGPTsentence,
-    //   audioFilePath
-    // );
+    await pushBilingualCardToAnki(
+      sentenceTranslation,
+      chatGPTsentence,
+      audioFilePath
+    );
   } else {
     // Standard logic for words/phrases (not quoted)
     const inputType = determineInputType(actualText);
